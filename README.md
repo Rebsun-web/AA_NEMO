@@ -118,4 +118,39 @@ Please read the contribution guidelines before submitting pull requests.
 
 ## Support
 
-For questions or issues, please open an issue in the repository. 
+For questions or issues, please open an issue in the repository.
+
+## Git Workflow for Beginners
+
+Before making any changes to the code, always follow these steps:
+
+1. **Pull the latest changes** (do this every time before starting work):
+   ```bash
+   git pull origin main
+   ```
+   This ensures you have the most recent version of the code.
+
+2. **Make your changes** to the code
+
+3. **Save your changes to Git**:
+   ```bash
+   # Check which files you modified
+   git status
+   
+   # Add your changes to Git
+   git add .
+   
+   # Save your changes with a descriptive message
+   git commit -m "Brief description of what you changed"
+   ```
+
+4. **Push your changes** so others can see them:
+   ```bash
+   git push origin main
+   ```
+
+⚠️ **Important Tips**:
+- Always pull before starting work to avoid conflicts
+- If you get any error messages during pull/push, ask for help before proceeding
+- Make sure to include a clear commit message describing what you changed
+- If you're unsure about any Git commands, it's better to ask for help than risk losing work 
