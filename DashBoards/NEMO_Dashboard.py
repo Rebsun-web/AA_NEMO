@@ -5,6 +5,11 @@ import warnings
 import sys
 import os
 
+# Page configuration
+st.set_page_config(
+    page_title="NEMO Visitor Prediction Tool", page_icon="🏛️", layout="wide"
+)
+
 warnings.filterwarnings("ignore")
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,12 +25,6 @@ except ImportError as e:
     st.error(f"Import error: {e}")
     st.error("Please check that your model classes are in the Models folder")
 
-
-# Configurations
-# Page configuration
-st.set_page_config(
-    page_title="NEMO Visitor Prediction Tool", page_icon="🏛️", layout="wide"
-)
 
 # Styling
 st.markdown(
@@ -605,110 +604,173 @@ class NEMOPredictionDashboard:
 
     def update_historical_data(self, input_data, visitor_predictions, crew_predictions):
         """Update historical data with new predictions and maintain data quality"""
-
         try:
             if st.session_state.historical_data is None:
                 st.warning("No historical data to update")
                 return
-
+            
             # Check if prediction date is within acceptable range
             prediction_date = pd.to_datetime(input_data["Date"])
             today = pd.to_datetime(datetime.now().date())
             days_ahead = (prediction_date - today).days
-
+            
             # Only save predictions for today or tomorrow
             if days_ahead > 1:
                 st.info(
                     f"Prediction is {days_ahead} days ahead. Not saving to historical data (only today and tomorrow are saved)."
                 )
                 return
-
-            # Create new row with predictions
+            
+            # Create new row with ALL the input data first
             new_row = input_data.copy()
-
-            # Add visitor predictions
-            for segment, values in visitor_predictions.items():
-                if len(values) > 0:
-                    # Handle both array and single value cases
-                    if hasattr(values, "__len__"):
-                        new_row[segment] = float(values[0])
+            
+            # Update ONLY the predicted fields with their predictions
+            # These are the fields that were predicted, not provided as input
+            predicted_segments = [
+                "Extern", "PO", "Recreatief Buitenland",
+                "Recreatief NL", "Student", "VO"
+            ]
+            
+            # Update visitor segment predictions
+            total_visitors = 0
+            for segment in predicted_segments:
+                if segment in visitor_predictions:
+                    values = visitor_predictions[segment]
+                    if isinstance(values, dict):
+                        # If using confidence predictions, get the point estimate
+                        value = float(values.get('point_estimate', 0))
+                    elif hasattr(values, "__len__"):
+                        value = float(values[0])
                     else:
-                        new_row[segment] = float(values)
-
-            # Add crew prediction
+                        value = float(values)
+                    
+                    new_row[segment] = value
+                    total_visitors += value
+            
+            # Handle Total Visitors separately - check both with space and underscore
+            if "Total Visitors" in visitor_predictions:
+                values = visitor_predictions["Total Visitors"]
+                if isinstance(values, dict):
+                    new_row["Total_Visitors"] = float(values.get('point_estimate', 0))
+                elif hasattr(values, "__len__"):
+                    new_row["Total_Visitors"] = float(values[0])
+                else:
+                    new_row["Total_Visitors"] = float(values)
+            elif "Total_Visitors" in visitor_predictions:
+                values = visitor_predictions["Total_Visitors"]
+                if isinstance(values, dict):
+                    new_row["Total_Visitors"] = float(values.get('point_estimate', 0))
+                elif hasattr(values, "__len__"):
+                    new_row["Total_Visitors"] = float(values[0])
+                else:
+                    new_row["Total_Visitors"] = float(values)
+            else:
+                # If Total Visitors is not in predictions, calculate it from segments
+                new_row["Total_Visitors"] = total_visitors
+            
+            # Update crew prediction (maat_visitors)
             if crew_predictions is not None and len(crew_predictions) > 0:
-                new_row["maat_visitors"] = crew_predictions.iloc[0][
-                    "predicted_crew_size"
-                ]
-
-            # Add prediction metadata
-            new_row["is_prediction"] = True
-            new_row["prediction_date"] = datetime.now()
-
+                new_row["maat_visitors"] = crew_predictions.iloc[0]["predicted_crew_size"]
+            
+            # Add metadata to track this is a row with predictions
+            new_row["has_predictions"] = True
+            new_row["prediction_made_date"] = datetime.now()
+            
             # Convert to DataFrame
             new_row_df = pd.DataFrame([new_row])
-
+            
+            # Ensure we have all columns from the original table
+            original_columns = st.session_state.historical_data.columns.tolist()
+            
+            # Add any missing columns with default values
+            for col in original_columns:
+                if col not in new_row_df.columns:
+                    # Skip metadata columns that might not exist in original data
+                    if col not in ["has_predictions", "prediction_made_date"]:
+                        new_row_df[col] = None
+            
+            # Reorder columns to match historical data (plus any new metadata columns)
+            final_columns = original_columns + [col for col in new_row_df.columns if col not in original_columns]
+            new_row_df = new_row_df[final_columns]
+            
             # Check for duplicate dates
             existing_dates = pd.to_datetime(st.session_state.historical_data["Date"])
             new_date = pd.to_datetime(new_row["Date"])
-
+            
             if new_date in existing_dates.values:
-                # Update existing row instead of adding duplicate
-                st.session_state.historical_data.loc[
-                    existing_dates == new_date, new_row_df.columns
-                ] = new_row_df.values[0]
-                st.info(
-                    f"📝 Updated existing prediction for {new_date.strftime('%Y-%m-%d')}"
+                # OVERWRITE THE ENTIRE ROW - remove old row and add new one
+                st.session_state.historical_data = st.session_state.historical_data[
+                    existing_dates != new_date
+                ]
+                
+                # Now append the new row
+                st.session_state.historical_data = pd.concat(
+                    [st.session_state.historical_data, new_row_df],
+                    ignore_index=True,
+                    sort=False  # Prevent column reordering
                 )
+                st.info(f"📝 Overwrote existing prediction for {new_date.strftime('%Y-%m-%d')}")
             else:
                 # Append new row
                 st.session_state.historical_data = pd.concat(
-                    [st.session_state.historical_data, new_row_df], ignore_index=True
+                    [st.session_state.historical_data, new_row_df],
+                    ignore_index=True,
+                    sort=False  # Prevent column reordering
                 )
-                st.success(
-                    f"📝 Added new prediction for {new_date.strftime('%Y-%m-%d')}"
-                )
-
+                st.success(f"📝 Added new row with predictions for {new_date.strftime('%Y-%m-%d')}")
+            
             # Sort by date
             st.session_state.historical_data["Date"] = pd.to_datetime(
                 st.session_state.historical_data["Date"]
             )
             st.session_state.historical_data = (
-                st.session_state.historical_data.sort_values("Date").reset_index(
-                    drop=True
-                )
+                st.session_state.historical_data.sort_values("Date").reset_index(drop=True)
             )
-
-            # Clean up old predictions (keep only last 30 days of predictions)
-            if "is_prediction" in st.session_state.historical_data.columns:
-                cutoff_date = datetime.now() - timedelta(days=30)
-                old_predictions = (
-                    st.session_state.historical_data["is_prediction"]
-                ) & (
-                    pd.to_datetime(st.session_state.historical_data["prediction_date"])
-                    < cutoff_date
-                )
-                if old_predictions.any():
-                    st.session_state.historical_data = st.session_state.historical_data[
-                        ~old_predictions
-                    ]
-                    st.info("Cleaned up old predictions older than 30 days")
-
-            st.info(
-                f"Historical data now contains {len(st.session_state.historical_data)} records"
-            )
-
-            # Save to CSV
-            predictions_file = os.path.join(
+            
+            # Save to the original Table_for_modelling.csv location
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            modelling_file = os.path.join(
                 project_root,
                 "Data_Sources",
-                "Predictions",
-                "historical_predictions.csv",
+                "Data_Cleaned",
+                "Modelling",
+                "Table_for_modelling.csv"
             )
-            st.session_state.historical_data.to_csv(predictions_file, index=False)
-
+            
+            # Create backup before saving
+            backup_filename = f'Table_for_modelling_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            backup_dir = os.path.join(
+                project_root,
+                "Data_Sources",
+                "Data_Cleaned",
+                "Modelling",
+                "BackUps"
+            )
+            
+            # Create BackUps directory if it doesn't exist
+            os.makedirs(backup_dir, exist_ok=True)
+            
+            backup_file = os.path.join(backup_dir, backup_filename)
+            
+            if os.path.exists(modelling_file):
+                import shutil
+                shutil.copy2(modelling_file, backup_file)
+                st.info(f"Created backup: {os.path.basename(backup_file)}")
+            
+            # Save updated data
+            st.session_state.historical_data.to_csv(modelling_file, index=False)
+            st.success(f"✅ Updated Table_for_modelling.csv with new predictions")
+            
+            # Clean up old backups (keep only last 5)
+            backup_files = sorted([f for f in os.listdir(backup_dir) if f.startswith('Table_for_modelling_backup_')])
+            if len(backup_files) > 5:
+                for old_backup in backup_files[:-5]:
+                    os.remove(os.path.join(backup_dir, old_backup))
+            
         except Exception as e:
             st.error(f"Error updating historical data: {e}")
+            import traceback
+            st.code(traceback.format_exc(), language="python")
 
     def train_models(self):
         """Train both models"""
@@ -760,13 +822,13 @@ class NEMOPredictionDashboard:
             or st.session_state.crew_predictor is None
         ):
             st.error("Models not trained yet!")
-            return None, None
-
+            return None, None, None  # Added third None
+        
         try:
             # Create DataFrame from input
             input_df = pd.DataFrame([input_data])
             prediction_date = pd.to_datetime(input_df["Date"].iloc[0])
-
+            
             # Show gap info
             if st.session_state.historical_data is not None:
                 last_historical_date = pd.to_datetime(
@@ -776,28 +838,22 @@ class NEMOPredictionDashboard:
                 st.info(
                     f"📊 Historical data: {last_historical_date.strftime('%Y-%m-%d')} → Predicting: {prediction_date.strftime('%Y-%m-%d')} ({days_gap} days gap)"
                 )
-
+            
             # 1. Get visitor predictions
-            # with st.expander("🔍 Visitor Prediction Debug"):
-            #     st.write("Input columns for visitor prediction:", list(input_df.columns))
-            #     nan_cols = input_df.columns[input_df.isnull().any()].tolist()
-            #     if nan_cols:
-            #         st.warning(f"NaN values in visitor input: {nan_cols}")
-
             if "maat_visitors" in input_df.columns:
                 input_df_for_visitors = input_df.drop(columns=["maat_visitors"])
             else:
                 input_df_for_visitors = input_df.copy()
-
+            
             visitor_predictions = st.session_state.visitor_predictor.predict(
                 input_df_for_visitors, historical_data=st.session_state.historical_data
             )
-
+            
             # 2. Update input_df with visitor predictions
             input_df_for_crew = input_df.copy()
             for segment, pred in visitor_predictions.items():
                 input_df_for_crew[f"{segment}_pred"] = pred
-
+            
             # 3. Add tourism features
             try:
                 date_range = [prediction_date]
@@ -807,11 +863,10 @@ class NEMOPredictionDashboard:
                 path = os.path.join(
                     project_root, "Data_Sources", "Data_Raw", "Data_Seasonal_Patterns"
                 )
-
                 tourism_features = create_tourism_features_for_dates(date_range, path)
                 tourism_features = tourism_features.reset_index()
                 tourism_features = tourism_features.rename(columns={"index": "Date"})
-
+                
                 # Ensure both dates are datetime and normalized
                 input_df_for_crew["Date"] = pd.to_datetime(
                     input_df_for_crew["Date"]
@@ -819,93 +874,87 @@ class NEMOPredictionDashboard:
                 tourism_features["Date"] = pd.to_datetime(
                     tourism_features["Date"]
                 ).dt.normalize()
-
+                
                 # Merge tourism features
                 input_df_for_crew = input_df_for_crew.merge(
                     tourism_features, on="Date", how="left"
                 )
-
             except Exception as e:
                 st.warning(f"Could not create tourism features: {e}")
-                # Set default values for features the crew model expects
-                tourism_defaults = {
-                    "hotel_occupancy_index": 0.5,
-                    "peak_season_flag": 0,
-                    "tourism_season_strength": 0.5,
-                    "cultural_engagement_score": 0.5,
-                    "cultural_vs_tourism_ratio": 0.5,
-                    "nemo_market_share": 0.1,
-                    "month_tourism_rank": 6,
-                    "shoulder_season_flag": 0,
-                    "seasonal_multiplier": 1.0,
-                    "museums_momentum": 0,
-                    "museums_yoy_growth": 0,
-                    "theaters_momentum": 0,
-                    "theaters_yoy_growth": 0,
-                    "_momentum": 0,
-                    "_yoy_growth": 0,
-                    "hotels_momentum": 0,
-                    "hotels_yoy_growth": 0,
-                    "nemo_momentum": 0,
-                    "nemo_yoy_growth": 0,
-                    "competitor_activity_index": 0.5,
-                    "tourism_pressure_coefficient": 0.5,
-                    "cultural_saturation_factor": 0.5,
-                    "monthly_expected_baseline": 1500,
-                }
-
-                for col, default_val in tourism_defaults.items():
-                    if col not in input_df_for_crew.columns:
-                        input_df_for_crew[col] = default_val
-
+            
+            # Set default values for features the crew model expects
+            tourism_defaults = {
+                "hotel_occupancy_index": 0.5,
+                "peak_season_flag": 0,
+                "tourism_season_strength": 0.5,
+                "cultural_engagement_score": 0.5,
+                "cultural_vs_tourism_ratio": 0.5,
+                "nemo_market_share": 0.1,
+                "month_tourism_rank": 6,
+                "shoulder_season_flag": 0,
+                "seasonal_multiplier": 1.0,
+                "museums_momentum": 0,
+                "museums_yoy_growth": 0,
+                "theaters_momentum": 0,
+                "theaters_yoy_growth": 0,
+                "_momentum": 0,
+                "_yoy_growth": 0,
+                "hotels_momentum": 0,
+                "hotels_yoy_growth": 0,
+                "nemo_momentum": 0,
+                "nemo_yoy_growth": 0,
+                "competitor_activity_index": 0.5,
+                "tourism_pressure_coefficient": 0.5,
+                "cultural_saturation_factor": 0.5,
+                "monthly_expected_baseline": 1500,
+            }
+            
+            for col, default_val in tourism_defaults.items():
+                if col not in input_df_for_crew.columns:
+                    input_df_for_crew[col] = default_val
+            
             # 4. Get historical lagged features
             input_df_for_crew = self.get_historical_lagged_features(
                 input_df_for_crew, st.session_state.historical_data, prediction_date
             )
-
-            # 5. Check for remaining NaN values IN THE CREW DATAFRAME
-            # with st.expander("🔍 Final Input Debug"):
-            #     nan_cols = input_df_for_crew.columns[input_df_for_crew.isnull().any()].tolist()
-            #     if nan_cols:
-            #         st.warning(f"Remaining NaN values: {nan_cols}")
-            #         for col in nan_cols:
-            #             st.write(f"  {col}: {input_df_for_crew[col].isnull().sum()} NaN values")
-            #     else:
-            #         st.success("✅ No NaN values in final input")
-
-            # 6. Predict crew size WITH THE CORRECT DATAFRAME
+            
+            # 5. Predict crew size
             crew_predictions = st.session_state.crew_predictor.predict(
                 input_df_for_crew
             )
-
-            # 7. Store predictions back to historical data
-            self.update_historical_data(
-                input_data, visitor_predictions, crew_predictions
-            )
-
-            return visitor_predictions, crew_predictions
-
+            
+            # 6. Create enriched input data dictionary with all features
+            enriched_input_data = input_df_for_crew.iloc[0].to_dict()
+            
+            # Remove the prediction columns that were added for crew model
+            pred_columns_to_remove = [col for col in enriched_input_data.keys() if col.endswith('_pred')]
+            for col in pred_columns_to_remove:
+                enriched_input_data.pop(col, None)
+            
+            return visitor_predictions, crew_predictions, enriched_input_data
+            
         except Exception as e:
             st.error(f"Error making predictions: {str(e)}")
             with st.expander("📋 Full Error Details"):
                 import traceback
-
                 st.code(traceback.format_exc(), language="python")
-            return None, None
+            return None, None, None
 
     def make_predictions_with_confidence(self, input_data):
         """Make predictions with confidence intervals and ranges"""
-
         # Get base predictions
-        visitor_predictions, crew_predictions = self.make_predictions(input_data)
-
-        if visitor_predictions is None:
+        visitor_predictions_raw, crew_predictions, enriched_input_data = self.make_predictions(input_data)
+        
+        if visitor_predictions_raw is None:  # Fixed: was checking visitor_predictions
             return None, None
-
+        
+        # Store raw predictions for historical update
+        self.last_raw_predictions = visitor_predictions_raw
+        
         # Calculate is_weekend from the date
         prediction_date = pd.to_datetime(input_data["Date"])
         is_weekend = prediction_date.weekday() >= 5
-
+        
         # Define segment characteristics
         segment_info = {
             "Recreatief NL": {
@@ -950,7 +999,7 @@ class NEMOPredictionDashboard:
                 "confidence_level": "very_low",
                 "historical_std_factor": 0.50,
             },
-            "Total Visitors": {
+            "Total Visitors": {  # Fixed: was "Total_Visitors"
                 "r2": 0.8127,
                 "rmse": 559.26,
                 "mae": 396.71,
@@ -958,27 +1007,28 @@ class NEMOPredictionDashboard:
                 "historical_std_factor": 0.12,
             },
         }
-
+        
         # Calculate confidence intervals
         confidence_predictions = {}
-
+        
         # Check if we have enough historical data
         has_good_historical_data = True
         if st.session_state.historical_data is not None:
             last_date = pd.to_datetime(st.session_state.historical_data["Date"]).max()
             days_gap = (prediction_date - last_date).days
             has_good_historical_data = days_gap <= 30
-
-        for segment, values in visitor_predictions.items():
+        
+        # Process each segment from the raw predictions
+        for segment, values in visitor_predictions_raw.items():  # Fixed: was visitor_predictions
             if segment in segment_info:
                 info = segment_info[segment]
-
+                
                 # Get point prediction
                 if hasattr(values, "__len__"):
                     point_estimate = float(values[0])
                 else:
                     point_estimate = float(values)
-
+                
                 # Calculate confidence intervals based on model performance
                 if info["confidence_level"] in ["high", "medium"]:
                     # For reliable models, use RMSE for confidence interval
@@ -1000,7 +1050,7 @@ class NEMOPredictionDashboard:
                         # Get historical statistics for similar conditions
                         hist_data = st.session_state.historical_data.copy()
                         hist_data["Date"] = pd.to_datetime(hist_data["Date"])
-
+                        
                         # Filter for similar conditions (weekend vs weekday)
                         if is_weekend:
                             similar_days = hist_data[
@@ -1010,7 +1060,7 @@ class NEMOPredictionDashboard:
                             similar_days = hist_data[
                                 ~hist_data["Date"].dt.weekday.isin([5, 6])
                             ]
-
+                        
                         # Also filter by month if we have enough data
                         month = prediction_date.month
                         month_data = similar_days[
@@ -1018,11 +1068,11 @@ class NEMOPredictionDashboard:
                         ]
                         if len(month_data) >= 5:
                             similar_days = month_data
-
+                        
                         if len(similar_days) > 0 and segment in similar_days.columns:
                             historical_mean = similar_days[segment].mean()
                             historical_std = similar_days[segment].std()
-
+                            
                             # Blend prediction with historical average
                             if info["r2"] < 0:  # Very poor model
                                 # Use mostly historical data
@@ -1037,7 +1087,7 @@ class NEMOPredictionDashboard:
                                 blended_prediction = (
                                     0.5 * point_estimate + 0.5 * historical_mean
                                 )
-
+                            
                             # Use historical variation for bounds
                             lower_bound = max(
                                 0, blended_prediction - 1.5 * historical_std
@@ -1055,7 +1105,7 @@ class NEMOPredictionDashboard:
                         lower_bound = max(0, point_estimate * 0.5)
                         upper_bound = point_estimate * 2
                         confidence_range = "High Uncertainty Range"
-
+                
                 # Additional check: if point estimate is 0 or very low due to
                 # missing features
                 if point_estimate < 10 and st.session_state.historical_data is not None:
@@ -1063,13 +1113,13 @@ class NEMOPredictionDashboard:
                     try:
                         hist_data = st.session_state.historical_data.copy()
                         hist_data["Date"] = pd.to_datetime(hist_data["Date"])
-
+                        
                         # Get similar days
                         similar_conditions = hist_data[
                             (hist_data["Date"].dt.weekday == prediction_date.weekday())
                             & (hist_data["Date"].dt.month == prediction_date.month)
                         ]
-
+                        
                         if (
                             len(similar_conditions) > 0
                             and segment in similar_conditions.columns
@@ -1084,7 +1134,7 @@ class NEMOPredictionDashboard:
                                 )
                     except BaseException:
                         pass
-
+                
                 confidence_predictions[segment] = {
                     "point_estimate": point_estimate,
                     "lower_bound": lower_bound,
@@ -1095,6 +1145,13 @@ class NEMOPredictionDashboard:
                     "has_recent_data": has_good_historical_data,
                 }
 
+        # Update historical data with raw predictions
+        self.update_historical_data(
+            enriched_input_data,
+            visitor_predictions_raw,  # Use raw predictions, not confidence
+            crew_predictions
+        )
+        
         return confidence_predictions, crew_predictions
 
     def display_results(self, visitor_predictions, crew_predictions):
