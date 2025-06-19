@@ -33,6 +33,31 @@
    - Temporal consistency checks
    - Cross-validation of different data sources
 
+### Project Data Structure
+
+```
+AA_NEMO/
+│
+├── Data_Sources/
+│   ├── Data_Raw/
+│   ├── Data_Modelling/
+│   │   ├── Modelling/
+│   │   │   └── Table_for_modelling.csv
+│   │   └── Predictions/
+│   │       └── Segmented_Visitor_Demand_Prediction.csv
+│   └── Data_Processing/
+│       └── Imputer_Final_df.py
+│
+├── Models/
+│   ├── Segmented_Demand.py
+│   └── Crew_Size_Prediction.py
+│
+├── Documentation/
+│   └── TECHNICAL_DOCUMENTATION.md
+│
+└── ...
+```
+
 ## Machine Learning Models
 
 ### 1. Segmented Visitor Prediction Model
@@ -323,4 +348,4 @@ logging.basicConfig(
 - Model performance optimization
 - Automated retraining pipeline
 - Enhanced visualization options
-- Scalability improvements 
+- Scalability improvements

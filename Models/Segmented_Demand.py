@@ -8,19 +8,20 @@ from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
-# Read data
+# --- Data Loading ---
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 modelling_path = os.path.join(
-    project_root, "Data_Sources", "Data_Cleaned", "Modelling", "Table_for_modelling.csv"
+    project_root,
+    "Data_Sources",
+    "Data_Modelling",
+    "Modelling",
+    "Table_for_modelling.csv"
 )
-
 df = pd.read_csv(modelling_path)
 
-# Visitors demand prediction by segments
+# --- Prepare Data ---
 copy_df = df.copy()
-copy_df = copy_df.drop(
-    columns=["maat_visitors"]
-)  # drop crew predictions, will be predicted later
+copy_df = copy_df.drop(columns=["maat_visitors"])  # drop crew predictions, will be predicted later
 
 
 class SegmentedVisitorPredictor:
@@ -39,422 +40,214 @@ class SegmentedVisitorPredictor:
             "Extern": "extern",
             "Total Visitors": "total_visitors",
         }
-
-        # Inverse mapping for converting back
         self.inverse_segment_mappings = {v: k for k, v in self.segment_mappings.items()}
 
     def standardize_column_names(self, df):
-        """Standardize column names to snake_case"""
+        """Standardize column names to snake_case and segment names."""
         df = df.copy()
-
-        # Rename segment columns
-        rename_dict = {
-            old: new for old, new in self.segment_mappings.items() if old in df.columns
-        }
+        rename_dict = {old: new for old, new in self.segment_mappings.items() if old in df.columns}
         df = df.rename(columns=rename_dict)
-
-        # Standardize other column names
-        df.columns = [
-            col.lower().replace(" ", "_").replace("/", "_") for col in df.columns
-        ]
-
+        df.columns = [col.lower().replace(" ", "_").replace("/", "_") for col in df.columns]
         return df
 
     def engineer_features(self, df, target_segment=None):
         """
         Engineer features with standardized column names.
-        If target_segment is provided, excludes current segment values
-        but keeps historical data.
+        If target_segment is provided, excludes current segment values but keeps historical data.
         """
         df = df.copy()
-
         # Calculate total visitors if not present
         if "total_visitors" not in df.columns:
-            visitor_cols = [
-                col
-                for col in self.segment_mappings.values()
-                if col != "total_visitors" and col in df.columns
-            ]
+            visitor_cols = [col for col in self.segment_mappings.values() if col != "total_visitors" and col in df.columns]
             df["total_visitors"] = df[visitor_cols].sum(axis=1)
-
-        # Get all segment columns except the target
+        # Remove current values of other segments for the target
         segment_cols = list(self.segment_mappings.values())
         if target_segment and target_segment in df.columns:
             if target_segment != "total_visitors":
-                # Only remove current values of other segments
-                current_segments = [
-                    col
-                    for col in segment_cols
-                    if col != target_segment and col != "total_visitors"
-                ]
+                current_segments = [col for col in segment_cols if col != target_segment and col != "total_visitors"]
                 df = df.drop(columns=current_segments)
             else:
-                current_segments = [
-                    col for col in segment_cols if col != target_segment
-                ]
+                current_segments = [col for col in segment_cols if col != target_segment]
                 df = df.drop(columns=current_segments)
-
-        # Convert date to datetime if not already
+        # Time features
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"])
-
-            # Basic time features
             df["year"] = df["date"].dt.year
             df["month"] = df["date"].dt.month
             df["day_of_week"] = df["date"].dt.dayofweek
             df["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
-
-            # Season (as one-hot encoded features)
             season_mapping = {
-                12: "winter",
-                1: "winter",
-                2: "winter",
-                3: "spring",
-                4: "spring",
-                5: "spring",
-                6: "summer",
-                7: "summer",
-                8: "summer",
-                9: "fall",
-                10: "fall",
-                11: "fall",
+                12: "winter", 1: "winter", 2: "winter",
+                3: "spring", 4: "spring", 5: "spring",
+                6: "summer", 7: "summer", 8: "summer",
+                9: "fall", 10: "fall", 11: "fall"
             }
             df["season"] = df["date"].dt.month.map(season_mapping)
-            season_dummies = pd.get_dummies(
-                df["season"],
-                prefix="season",
-                drop_first=True,  # Drop one category to avoid multicollinearity
-            )
+            season_dummies = pd.get_dummies(df["season"], prefix="season", drop_first=True)
             df = pd.concat([df, season_dummies], axis=1)
             df = df.drop("season", axis=1)
-
-        # Weather features if available
+        # Weather features
         weather_cols = ["meantemp_c", "precipitation_mm"]
         if all(col in df.columns for col in weather_cols):
-            df["good_weather"] = (
-                (df["meantemp_c"] > 15) & (df["precipitation_mm"] < 1)
-            ).astype(int)
-            df["bad_weather"] = (
-                (df["meantemp_c"] < 10) | (df["precipitation_mm"] > 5)
-            ).astype(int)
-
-            # Bin temperature into categories and one-hot encode
+            df["good_weather"] = ((df["meantemp_c"] > 15) & (df["precipitation_mm"] < 1)).astype(int)
+            df["bad_weather"] = ((df["meantemp_c"] < 10) | (df["precipitation_mm"] > 5)).astype(int)
             df["temp_category"] = pd.cut(
                 df["meantemp_c"],
                 bins=[-float("inf"), 5, 15, 25, float("inf")],
-                labels=["cold", "mild", "warm", "hot"],
+                labels=["cold", "mild", "warm", "hot"]
             )
-            temp_dummies = pd.get_dummies(
-                df["temp_category"], prefix="temp", drop_first=True
-            )
+            temp_dummies = pd.get_dummies(df["temp_category"], prefix="temp", drop_first=True)
             df = pd.concat([df, temp_dummies], axis=1)
             df = df.drop("temp_category", axis=1)
-
-            # Bin precipitation into categories and one-hot encode
             df["precip_category"] = pd.cut(
                 df["precipitation_mm"],
                 bins=[-float("inf"), 0.1, 5, float("inf")],
-                labels=["dry", "light", "heavy"],
+                labels=["dry", "light", "heavy"]
             )
-            precip_dummies = pd.get_dummies(
-                df["precip_category"], prefix="precip", drop_first=True
-            )
+            precip_dummies = pd.get_dummies(df["precip_category"], prefix="precip", drop_first=True)
             df = pd.concat([df, precip_dummies], axis=1)
             df = df.drop("precip_category", axis=1)
-
-        # Create day type features
+        # Day type features
         df["is_monday"] = (df["day_of_week"] == 0).astype(int)
         df["is_friday"] = (df["day_of_week"] == 4).astype(int)
         df["is_saturday"] = (df["day_of_week"] == 5).astype(int)
         df["is_sunday"] = (df["day_of_week"] == 6).astype(int)
-
-        # Drop original day_of_week as we have more specific features now
         df = df.drop("day_of_week", axis=1)
-
-        # Add holiday interaction features if available
+        # Holiday features
         holiday_cols = [col for col in df.columns if "holiday" in col.lower()]
         if holiday_cols:
             df["total_holidays"] = df[holiday_cols].sum(axis=1)
             if target_segment == "recreatief_nl":
                 df["nl_holiday_effect"] = df["holiday_nl"].fillna(0)
             elif target_segment == "recreatief_buitenland":
-                # For international visitors, consider international holidays
                 intl_holidays = [col for col in holiday_cols if col != "holiday_nl"]
                 df["intl_holiday_effect"] = df[intl_holidays].sum(axis=1)
             elif target_segment in ["po", "vo", "student"]:
-                # For educational segments, focus on relevant holidays
-                df["edu_holiday_effect"] = (
-                    df["holiday_nl"].fillna(0) * 2
-                    + df["total_holidays"]  # Double weight for local holidays
-                )
-
+                df["edu_holiday_effect"] = df["holiday_nl"].fillna(0) * 2 + df["total_holidays"]
         return df
 
     def add_lagged_features(self, df, segment, lags=[1, 7, 14, 28]):
-        """Add lagged features using standardized column names"""
         df = df.copy()
-
-        # Get all segment columns as they represent historical data
-        segment_cols = [
-            col for col in self.segment_mappings.values() if col in df.columns
-        ]
-
+        segment_cols = [col for col in self.segment_mappings.values() if col in df.columns]
         for lag in lags:
-            # Add lags for all segments as they represent historical data
             for seg in segment_cols:
                 df[f"{seg}_lag_{lag}"] = df[seg].shift(lag)
-
-            # Add cross-segment features using historical data
             if segment in ["recreatief_nl", "recreatief_buitenland"]:
-                rec_cols = ["recreatief_nl", "recreatief_buitenland"]
-                rec_cols = [col for col in rec_cols if col in df.columns]
+                rec_cols = [col for col in ["recreatief_nl", "recreatief_buitenland"] if col in df.columns]
                 if rec_cols:
-                    df[f"total_recreational_lag_{lag}"] = (
-                        df[rec_cols].fillna(0).sum(axis=1).shift(lag)
-                    )
-
+                    df[f"total_recreational_lag_{lag}"] = df[rec_cols].fillna(0).sum(axis=1).shift(lag)
             elif segment in ["po", "vo", "student"]:
-                edu_cols = ["po", "vo", "student"]
-                edu_cols = [col for col in edu_cols if col in df.columns]
+                edu_cols = [col for col in ["po", "vo", "student"] if col in df.columns]
                 if edu_cols:
-                    df[f"total_educational_lag_{lag}"] = (
-                        df[edu_cols].fillna(0).sum(axis=1).shift(lag)
-                    )
-
-            # Add day-of-week specific lags for the target segment
+                    df[f"total_educational_lag_{lag}"] = df[edu_cols].fillna(0).sum(axis=1).shift(lag)
             if segment in df.columns:
-                # Last week same day
                 df[f"{segment}_lastweek_sameday"] = df[segment].shift(7)
-                # Average of last 4 same weekdays
                 df[f"{segment}_avg_4weeks_sameday"] = (
-                    df[segment].shift(7)
-                    + df[segment].shift(14)
-                    + df[segment].shift(21)
-                    + df[segment].shift(28)
+                    df[segment].shift(7) + df[segment].shift(14) + df[segment].shift(21) + df[segment].shift(28)
                 ) / 4
-
         return df
 
     def add_rolling_features(self, df, segment, windows=[7, 14, 30]):
-        """Add rolling features using standardized column names"""
         df = df.copy()
-
-        # Get all segment columns as they represent historical data
-        segment_cols = [
-            col for col in self.segment_mappings.values() if col in df.columns
-        ]
-
+        segment_cols = [col for col in self.segment_mappings.values() if col in df.columns]
         for window in windows:
-            # Add rolling stats for all segments
             for seg in segment_cols:
-                df[f"{seg}_rolling_mean_{window}"] = (
-                    df[seg].shift(1).rolling(window=window).mean()
-                )
-                df[f"{seg}_rolling_std_{window}"] = (
-                    df[seg].shift(1).rolling(window=window).std()
-                )
-
-            # Add segment group rolling features
+                df[f"{seg}_rolling_mean_{window}"] = df[seg].shift(1).rolling(window=window).mean()
+                df[f"{seg}_rolling_std_{window}"] = df[seg].shift(1).rolling(window=window).std()
             if segment in ["recreatief_nl", "recreatief_buitenland"]:
-                rec_cols = ["recreatief_nl", "recreatief_buitenland"]
-                rec_cols = [col for col in rec_cols if col in df.columns]
+                rec_cols = [col for col in ["recreatief_nl", "recreatief_buitenland"] if col in df.columns]
                 if rec_cols:
-                    df[f"total_recreational_rolling_{window}"] = (
-                        df[rec_cols]
-                        .fillna(0)
-                        .sum(axis=1)
-                        .shift(1)
-                        .rolling(window=window)
-                        .mean()
-                    )
-
+                    df[f"total_recreational_rolling_{window}"] = df[rec_cols].fillna(0).sum(axis=1).shift(1).rolling(window=window).mean()
             elif segment in ["po", "vo", "student"]:
-                edu_cols = ["po", "vo", "student"]
-                edu_cols = [col for col in edu_cols if col in df.columns]
+                edu_cols = [col for col in ["po", "vo", "student"] if col in df.columns]
                 if edu_cols:
-                    df[f"total_educational_rolling_{window}"] = (
-                        df[edu_cols]
-                        .fillna(0)
-                        .sum(axis=1)
-                        .shift(1)
-                        .rolling(window=window)
-                        .mean()
-                    )
-
-            # Add holiday density if available
+                    df[f"total_educational_rolling_{window}"] = df[edu_cols].fillna(0).sum(axis=1).shift(1).rolling(window=window).mean()
             if "is_holiday" in df.columns:
-                df[f"holiday_density_{window}"] = (
-                    df["is_holiday"].rolling(window=window).mean()
-                )
-
+                df[f"holiday_density_{window}"] = df["is_holiday"].rolling(window=window).mean()
         return df
 
     def prepare_segment_data(self, df, segment):
-        """Prepare data for a specific segment using standardized column names"""
-        # Standardize column names
         df_processed = self.standardize_column_names(df)
-
-        # Engineer basic features without other segments
         df_processed = self.engineer_features(df_processed, target_segment=segment)
-
-        # Add lagged and rolling features
         df_processed = self.add_lagged_features(df_processed, segment)
         df_processed = self.add_rolling_features(df_processed, segment)
-
-        # Drop rows with NaN values (usually at the start due to lagging)
         df_processed = df_processed.dropna()
-
-        # Drop date column as it's not needed for modeling
         if "date" in df_processed.columns:
             df_processed = df_processed.drop("date", axis=1)
-
-        # Select features and target
         features = [col for col in df_processed.columns if col != segment]
         print(f"Features used for {segment}: {features}")
-
         X = df_processed[features]
         y = df_processed[segment]
-
         return X, y, features
 
     def train_segment_model(self, X, y, segment, visitor_predictions):
-        """Train model for a specific segment"""
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
-
-        # Scale features
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         scaler = StandardScaler()
-        # Convert to numpy arrays for scaling
         X_train_scaled = scaler.fit_transform(X_train.to_numpy())
         X_test_scaled = scaler.transform(X_test.to_numpy())
-
-        # Initialize and train model with segment-specific parameters
         if segment == "total_visitors":
-            # For total visitors, use a more robust model
             model = XGBRegressor(
-                n_estimators=1000,
-                learning_rate=0.01,
-                max_depth=7,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                min_child_weight=3,
-                random_state=42,
-                eval_metric=["rmse", "mae"],
+                n_estimators=1000, learning_rate=0.01, max_depth=7,
+                subsample=0.8, colsample_bytree=0.8, min_child_weight=3,
+                random_state=42, eval_metric=["rmse", "mae"]
             )
         elif segment == "extern":
-            # For extern segment (poorest performing), use more complex model
             model = XGBRegressor(
-                n_estimators=1000,
-                learning_rate=0.005,
-                max_depth=8,
-                subsample=0.8,
-                colsample_bytree=0.7,
-                min_child_weight=3,
-                random_state=42,
-                eval_metric=["rmse", "mae"],
+                n_estimators=1000, learning_rate=0.005, max_depth=8,
+                subsample=0.8, colsample_bytree=0.7, min_child_weight=3,
+                random_state=42, eval_metric=["rmse", "mae"]
             )
         elif segment in ["vo", "student"]:
-            # For VO and Student segments (moderate performance)
             model = XGBRegressor(
-                n_estimators=750,
-                learning_rate=0.008,
-                max_depth=6,
-                subsample=0.85,
-                colsample_bytree=0.8,
-                min_child_weight=2,
-                random_state=42,
-                eval_metric=["rmse", "mae"],
+                n_estimators=750, learning_rate=0.008, max_depth=6,
+                subsample=0.85, colsample_bytree=0.8, min_child_weight=2,
+                random_state=42, eval_metric=["rmse", "mae"]
             )
         else:
-            # For better performing segments
             model = XGBRegressor(
-                n_estimators=500,
-                learning_rate=0.01,
-                max_depth=5,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                random_state=42,
-                eval_metric=["rmse", "mae"],
+                n_estimators=500, learning_rate=0.01, max_depth=5,
+                subsample=0.8, colsample_bytree=0.8, random_state=42,
+                eval_metric=["rmse", "mae"]
             )
-
-        # Train the model
-        model.fit(
-            X_train_scaled,
-            y_train,
-            eval_set=[(X_train_scaled, y_train), (X_test_scaled, y_test)],
-            verbose=False,
-        )
-
-        # Evaluate
+        model.fit(X_train_scaled, y_train, eval_set=[(X_train_scaled, y_train), (X_test_scaled, y_test)], verbose=False)
         y_pred_test = model.predict(X_test_scaled)
         y_pred_train = model.predict(X_train_scaled)
-
-        # Store predictions with indices
         visitor_predictions[segment] = {
             "train_predictions": pd.Series(y_pred_train, index=X_train.index),
             "test_predictions": pd.Series(y_pred_test, index=X_test.index),
             "train_actual": y_train,
             "test_actual": y_test,
         }
-
         test_rmse = np.sqrt(mean_squared_error(y_test, y_pred_test))
         test_r2 = r2_score(y_test, y_pred_test)
         test_mae = mean_absolute_error(y_test, y_pred_test)
-
         train_rmse = np.sqrt(mean_squared_error(y_train, y_pred_train))
         train_r2 = r2_score(y_train, y_pred_train)
         train_mae = mean_absolute_error(y_train, y_pred_train)
-
         print(f"\nResults for {self.inverse_segment_mappings[segment]}:")
         print(f"Test_RMSE: {test_rmse:.4f}")
         print(f"Test_R²: {test_r2:.4f}")
         print(f"Test_MAE: {test_mae:.4f}")
-
         print(f"Train_RMSE: {train_rmse:.4f}")
         print(f"Train_R²: {train_r2:.4f}")
         print(f"Train_MAE: {train_mae:.4f}")
-
-        # Print feature importance
-        feature_importance = pd.DataFrame(
-            {"feature": X.columns, "importance": model.feature_importances_}
-        )
-        feature_importance = feature_importance.sort_values(
-            "importance", ascending=False
-        ).head(10)
-
+        feature_importance = pd.DataFrame({"feature": X.columns, "importance": model.feature_importances_})
+        feature_importance = feature_importance.sort_values("importance", ascending=False).head(10)
         print("\nTop 10 Most Important Features:")
         for _, row in feature_importance.iterrows():
             print(f"{row['feature']}: {row['importance']:.4f}")
-
         return model, scaler, visitor_predictions
 
     def fit(self, df):
-        """Fit models for all segments"""
-
-        # Drop maat_visitors column immediately to avoid conversion issues
         df_clean = df.copy()
         if "maat_visitors" in df_clean.columns:
             df_clean = df_clean.drop(columns=["maat_visitors"])
-
-        # Dictionary to save visitor predictions by segments
         visitor_predictions = {}
-
         for original_segment, standardized_segment in self.segment_mappings.items():
             print(f"\nTraining model for {original_segment}")
             print("=" * 50)
-
-            # Prepare data
             X, y, features = self.prepare_segment_data(df, standardized_segment)
-
-            # Train model
-            model, scaler, visitor_predictions = self.train_segment_model(
-                X, y, standardized_segment, visitor_predictions
-            )
-
-            # Store model, scaler and features
+            model, scaler, visitor_predictions = self.train_segment_model(X, y, standardized_segment, visitor_predictions)
             self.models[standardized_segment] = model
             self.scalers[standardized_segment] = scaler
             self.feature_sets[standardized_segment] = features
@@ -465,7 +258,7 @@ class SegmentedVisitorPredictor:
 
         # If no historical data provided, we'll need it for lagged/rolling features
         if historical_data is None:
-            st.warning(
+            print(
                 "No historical data provided. Lagged and rolling features will be set to 0."
             )
 
@@ -541,24 +334,19 @@ class SegmentedVisitorPredictor:
 
         return predictions
 
-    def add_historical_features(
-        self, current_data, historical_data, segment, expected_features
-    ):
-        """Calculate lagged and rolling features using historical data with cutoff handling"""
-
+    def add_historical_features(self, current_data, historical_data, segment, expected_features):
+        """
+        Calculate lagged and rolling features using historical data with cutoff handling.
+        """
         # Make a copy and ensure we have a clean index
-        current_data = current_data.copy()
-        current_data = current_data.reset_index(drop=True)
+        current_data = current_data.copy().reset_index(drop=True)
 
         # Standardize historical data column names
         hist_data = self.standardize_column_names(historical_data.copy())
 
         # Check for and handle duplicate columns
         if hist_data.columns.duplicated().any():
-            print(
-                "Warning: Duplicate columns found in historical data. Removing duplicates."
-            )
-            # Keep only the first occurrence of each column
+            print("Warning: Duplicate columns found in historical data. Removing duplicates.")
             hist_data = hist_data.loc[:, ~hist_data.columns.duplicated()]
 
         # Ensure date column is datetime
@@ -575,80 +363,53 @@ class SegmentedVisitorPredictor:
         hist_data = hist_data.sort_values("date")
         last_historical_date = hist_data["date"].max()
 
-        print(
-            f"Using historical data up to: {last_historical_date.strftime('%Y-%m-%d')}"
-        )
+        print(f"Using historical data up to: {last_historical_date.strftime('%Y-%m-%d')}")
         print(f"Predicting for: {prediction_date.strftime('%Y-%m-%d')}")
 
         # Calculate days between last historical date and prediction date
         days_gap = (prediction_date - last_historical_date).days
         if days_gap > 0:
-            print(
-                f"Warning: Gap of {days_gap} days between historical data and prediction date"
-            )
+            print(f"Warning: Gap of {days_gap} days between historical data and prediction date")
 
         # Calculate total visitors if not present in historical data
         if "total_visitors" not in hist_data.columns:
             visitor_cols = [
-                col
-                for col in self.segment_mappings.values()
+                col for col in self.segment_mappings.values()
                 if col != "total_visitors" and col in hist_data.columns
             ]
             if visitor_cols:
                 hist_data["total_visitors"] = hist_data[visitor_cols].sum(axis=1)
 
         # Get all segment columns for feature calculation
-        segment_cols = [
-            col for col in self.segment_mappings.values() if col in hist_data.columns
-        ]
+        segment_cols = [col for col in self.segment_mappings.values() if col in hist_data.columns]
 
         # Calculate lagged features based on last historical date
         lags = [1, 7, 14, 28]
         for lag in lags:
-            # Calculate the target date for this lag from the prediction date
             target_lag_date = prediction_date - pd.Timedelta(days=lag)
-
-            # If the target lag date is after our last historical date,
-            # adjust to use the closest available historical data
             if target_lag_date > last_historical_date:
-                # Use data from (last_historical_date - remaining_lag_days)
                 remaining_lag = lag - days_gap
-                if remaining_lag > 0:
-                    adjusted_lag_date = last_historical_date - pd.Timedelta(
-                        days=remaining_lag
-                    )
-                else:
-                    # If even adjusted lag goes beyond our data, use the last available data
-                    adjusted_lag_date = last_historical_date
+                adjusted_lag_date = last_historical_date - pd.Timedelta(days=remaining_lag) if remaining_lag > 0 else last_historical_date
             else:
                 adjusted_lag_date = target_lag_date
 
-            # Find the closest historical date
             closest_idx = None
             if len(hist_data.loc[hist_data["date"] <= adjusted_lag_date]) > 0:
-                closest_idx = hist_data.loc[
-                    hist_data["date"] <= adjusted_lag_date, "date"
-                ].idxmax()
+                closest_idx = hist_data.loc[hist_data["date"] <= adjusted_lag_date, "date"].idxmax()
 
             if closest_idx is not None:
                 # Add lags for all segments
                 for seg in segment_cols:
                     feature_name = f"{seg}_lag_{lag}"
                     if feature_name in expected_features:
-                        if seg in hist_data.columns:
-                            value = hist_data.loc[closest_idx, seg]
-                            if isinstance(value, pd.Series):
-                                value = value.iloc[0]
-                        else:
-                            value = 0
-
-                        # Assign value to all rows in current_data
+                        value = hist_data.loc[closest_idx, seg] if seg in hist_data.columns else 0
+                        if isinstance(value, pd.Series):
+                            value = value.iloc[0]
                         current_data.loc[:, feature_name] = value
 
                 # Add cross-segment features
                 if segment in ["recreatief_nl", "recreatief_buitenland"]:
-                    rec_cols = ["recreatief_nl", "recreatief_buitenland"]
-                    rec_cols = [col for col in rec_cols if col in hist_data.columns]
+                    rec_cols = [col for col in ["recreatief_nl", "recreatief_buitenland"] if col in hist_data.columns]
                     feature_name = f"total_recreational_lag_{lag}"
                     if rec_cols and feature_name in expected_features:
                         value = hist_data.loc[closest_idx, rec_cols].sum()
@@ -657,8 +418,7 @@ class SegmentedVisitorPredictor:
                         current_data.loc[:, feature_name] = value
 
                 elif segment in ["po", "vo", "student"]:
-                    edu_cols = ["po", "vo", "student"]
-                    edu_cols = [col for col in edu_cols if col in hist_data.columns]
+                    edu_cols = [col for col in ["po", "vo", "student"] if col in hist_data.columns]
                     feature_name = f"total_educational_lag_{lag}"
                     if edu_cols and feature_name in expected_features:
                         value = hist_data.loc[closest_idx, edu_cols].sum()
@@ -669,34 +429,23 @@ class SegmentedVisitorPredictor:
                 # Add day-of-week specific lags
                 if segment in hist_data.columns:
                     if f"{segment}_lastweek_sameday" in expected_features:
-                        # For last week same day, adjust similarly
                         target_same_day = prediction_date - pd.Timedelta(days=7)
                         if target_same_day > last_historical_date:
-                            # Use the last available same weekday
                             prediction_weekday = prediction_date.weekday()
-                            same_weekday_data = hist_data[
-                                hist_data["date"].dt.weekday == prediction_weekday
-                            ]
+                            same_weekday_data = hist_data[hist_data["date"].dt.weekday == prediction_weekday]
                             if len(same_weekday_data) > 0:
-                                last_same_weekday_idx = same_weekday_data[
-                                    "date"
-                                ].idxmax()
+                                last_same_weekday_idx = same_weekday_data["date"].idxmax()
                                 value = hist_data.loc[last_same_weekday_idx, segment]
                                 if isinstance(value, pd.Series):
                                     value = value.iloc[0]
-                                current_data.loc[
-                                    :, f"{segment}_lastweek_sameday"
-                                ] = value
+                                current_data.loc[:, f"{segment}_lastweek_sameday"] = value
                         else:
-                            closest_same_day = hist_data.loc[
-                                hist_data["date"] <= target_same_day, "date"
-                            ].idxmax()
+                            closest_same_day = hist_data.loc[hist_data["date"] <= target_same_day, "date"].idxmax()
                             value = hist_data.loc[closest_same_day, segment]
                             if isinstance(value, pd.Series):
                                 value = value.iloc[0]
                             current_data.loc[:, f"{segment}_lastweek_sameday"] = value
 
-                    # Calculate average of last 4 same weekdays
                     if f"{segment}_avg_4weeks_sameday" in expected_features:
                         prediction_weekday = prediction_date.weekday()
                         same_weekday_dates = [
@@ -705,20 +454,12 @@ class SegmentedVisitorPredictor:
                             prediction_date - pd.Timedelta(days=21),
                             prediction_date - pd.Timedelta(days=28),
                         ]
-
                         same_weekday_values = []
                         for target_date in same_weekday_dates:
                             if target_date <= last_historical_date:
-                                # Use exact or closest date
                                 closest = (
-                                    hist_data.loc[
-                                        hist_data["date"] <= target_date, "date"
-                                    ].idxmax()
-                                    if len(
-                                        hist_data.loc[hist_data["date"] <= target_date]
-                                    )
-                                    > 0
-                                    else None
+                                    hist_data.loc[hist_data["date"] <= target_date, "date"].idxmax()
+                                    if len(hist_data.loc[hist_data["date"] <= target_date]) > 0 else None
                                 )
                                 if closest is not None and segment in hist_data.columns:
                                     value = hist_data.loc[closest, segment]
@@ -726,26 +467,16 @@ class SegmentedVisitorPredictor:
                                         value = value.iloc[0]
                                     same_weekday_values.append(value)
                             else:
-                                # Use historical same weekdays
-                                same_weekday_historical = hist_data[
-                                    hist_data["date"].dt.weekday == prediction_weekday
-                                ]
+                                same_weekday_historical = hist_data[hist_data["date"].dt.weekday == prediction_weekday]
                                 if len(same_weekday_historical) > 0:
-                                    # Use the most recent same weekday
                                     recent_same_weekday = same_weekday_historical.loc[
-                                        same_weekday_historical["date"].idxmax(),
-                                        segment,
+                                        same_weekday_historical["date"].idxmax(), segment
                                     ]
                                     if isinstance(recent_same_weekday, pd.Series):
-                                        recent_same_weekday = recent_same_weekday.iloc[
-                                            0
-                                        ]
+                                        recent_same_weekday = recent_same_weekday.iloc[0]
                                     same_weekday_values.append(recent_same_weekday)
-
                         if same_weekday_values:
-                            current_data.loc[
-                                :, f"{segment}_avg_4weeks_sameday"
-                            ] = np.mean(same_weekday_values)
+                            current_data.loc[:, f"{segment}_avg_4weeks_sameday"] = np.mean(same_weekday_values)
             else:
                 # If no historical data available for this lag, use the most recent available data
                 if len(hist_data) > 0:
@@ -753,11 +484,7 @@ class SegmentedVisitorPredictor:
                     for seg in segment_cols:
                         feature_name = f"{seg}_lag_{lag}"
                         if feature_name in expected_features:
-                            value = (
-                                hist_data.loc[last_idx, seg]
-                                if seg in hist_data.columns
-                                else 0
-                            )
+                            value = hist_data.loc[last_idx, seg] if seg in hist_data.columns else 0
                             if isinstance(value, pd.Series):
                                 value = value.iloc[0]
                             current_data.loc[:, feature_name] = value
@@ -765,29 +492,20 @@ class SegmentedVisitorPredictor:
         # Calculate rolling features based on available historical data
         windows = [7, 14, 30]
         for window in windows:
-            # Calculate the target window start date
             target_window_start = prediction_date - pd.Timedelta(days=window)
-
-            # Adjust window to use available historical data
             if target_window_start > last_historical_date:
-                # Use the last available window of the same size
                 adjusted_window_start = last_historical_date - pd.Timedelta(days=window)
                 adjusted_window_end = last_historical_date
             else:
-                # Use data up to the last historical date, but maintain window size
-                adjusted_window_end = min(
-                    last_historical_date, prediction_date - pd.Timedelta(days=1)
-                )
+                adjusted_window_end = min(last_historical_date, prediction_date - pd.Timedelta(days=1))
                 adjusted_window_start = adjusted_window_end - pd.Timedelta(days=window)
 
-            # Get window data
             window_data = hist_data[
-                (hist_data["date"] >= adjusted_window_start)
-                & (hist_data["date"] <= adjusted_window_end)
+                (hist_data["date"] >= adjusted_window_start) &
+                (hist_data["date"] <= adjusted_window_end)
             ]
 
             if len(window_data) > 0:
-                # Add rolling stats for all segments
                 for seg in segment_cols:
                     feature_mean = f"{seg}_rolling_mean_{window}"
                     feature_std = f"{seg}_rolling_std_{window}"
@@ -797,65 +515,42 @@ class SegmentedVisitorPredictor:
                         current_data.loc[:, feature_mean] = mean_value
 
                     if feature_std in expected_features and seg in window_data.columns:
-                        std_value = (
-                            float(window_data[seg].std())
-                            if len(window_data) > 1
-                            else 0.0
-                        )
+                        std_value = float(window_data[seg].std()) if len(window_data) > 1 else 0.0
                         current_data.loc[:, feature_std] = std_value
 
-                # Add segment group rolling features
                 if segment in ["recreatief_nl", "recreatief_buitenland"]:
-                    rec_cols = ["recreatief_nl", "recreatief_buitenland"]
-                    rec_cols = [col for col in rec_cols if col in window_data.columns]
+                    rec_cols = [col for col in ["recreatief_nl", "recreatief_buitenland"] if col in window_data.columns]
                     feature_name = f"total_recreational_rolling_{window}"
                     if rec_cols and feature_name in expected_features:
                         value = float(window_data[rec_cols].sum(axis=1).mean())
                         current_data.loc[:, feature_name] = value
 
                 elif segment in ["po", "vo", "student"]:
-                    edu_cols = ["po", "vo", "student"]
-                    edu_cols = [col for col in edu_cols if col in window_data.columns]
+                    edu_cols = [col for col in ["po", "vo", "student"] if col in window_data.columns]
                     feature_name = f"total_educational_rolling_{window}"
                     if edu_cols and feature_name in expected_features:
                         value = float(window_data[edu_cols].sum(axis=1).mean())
                         current_data.loc[:, feature_name] = value
             else:
-                # If no data available for this window, use the last available values
                 if len(hist_data) > 0:
                     last_values = hist_data.tail(min(window, len(hist_data)))
                     for seg in segment_cols:
                         feature_mean = f"{seg}_rolling_mean_{window}"
                         feature_std = f"{seg}_rolling_std_{window}"
 
-                        if (
-                            feature_mean in expected_features
-                            and seg in last_values.columns
-                        ):
-                            # Ensure we get a single column even if there are duplicates
+                        if feature_mean in expected_features and seg in last_values.columns:
                             seg_values = last_values[seg]
                             if isinstance(seg_values, pd.DataFrame):
-                                # Multiple columns with same name - take first
                                 seg_values = seg_values.iloc[:, 0]
-
-                            # Calculate mean and ensure it's a scalar
                             mean_value = seg_values.mean()
                             if isinstance(mean_value, pd.Series):
                                 mean_value = mean_value.iloc[0]
-
                             current_data.loc[:, feature_mean] = float(mean_value)
 
-                        if (
-                            feature_std in expected_features
-                            and seg in last_values.columns
-                        ):
-                            # Ensure we get a single column even if there are duplicates
+                        if feature_std in expected_features and seg in last_values.columns:
                             seg_values = last_values[seg]
                             if isinstance(seg_values, pd.DataFrame):
-                                # Multiple columns with same name - take first
                                 seg_values = seg_values.iloc[:, 0]
-
-                            # Calculate std and ensure it's a scalar
                             if len(seg_values) > 1:
                                 std_value = seg_values.std()
                                 if isinstance(std_value, pd.Series):
@@ -863,20 +558,19 @@ class SegmentedVisitorPredictor:
                                 std_value = float(std_value)
                             else:
                                 std_value = 0.0
-
                             current_data.loc[:, feature_std] = std_value
 
         return current_data
 
     def get_predictions_dataframe(self, df):
         """
-        Create a DataFrame with predictions for all segments, preserving all original rows
+        Create a DataFrame with predictions for all segments, preserving all original rows.
         """
-        # First, fit the models if not already done
+        # Fit the models if not already done
         if not self.models:
             self.fit(df)
 
-        # Initialize results with full original index
+        # Prepare results with the full original index
         all_predictions = {}
         original_index = df.index
 
@@ -911,19 +605,13 @@ class SegmentedVisitorPredictor:
                 original_name = self.inverse_segment_mappings[segment]
 
                 # Fill in train predictions and labels
-                all_predictions[f"{original_name}_pred"].loc[
-                    X_train.index
-                ] = y_pred_train
-                all_predictions[f"{original_name}_actual"].loc[
-                    X_train.index
-                ] = y_train.values
+                all_predictions[f"{original_name}_pred"].loc[X_train.index] = y_pred_train
+                all_predictions[f"{original_name}_actual"].loc[X_train.index] = y_train.values
                 all_predictions[f"{original_name}_set"].loc[X_train.index] = "train"
 
                 # Fill in test predictions and labels
                 all_predictions[f"{original_name}_pred"].loc[X_test.index] = y_pred_test
-                all_predictions[f"{original_name}_actual"].loc[
-                    X_test.index
-                ] = y_test.values
+                all_predictions[f"{original_name}_actual"].loc[X_test.index] = y_test.values
                 all_predictions[f"{original_name}_set"].loc[X_test.index] = "test"
 
         # Create DataFrame
@@ -943,7 +631,7 @@ class SegmentedVisitorPredictor:
 
         Args:
             segment (str, optional): Specific segment to analyze.
-                                   If None, analyzes all segments.
+                                     If None, analyzes all segments.
             top_n (int): Number of top features to show.
             plot (bool): Whether to create visualizations.
 
@@ -951,9 +639,7 @@ class SegmentedVisitorPredictor:
             dict: Dictionary containing feature importance analysis for each segment.
         """
         results = {}
-        segments_to_analyze = (
-            [segment] if segment else list(self.segment_mappings.values())
-        )
+        segments_to_analyze = [segment] if segment else list(self.segment_mappings.values())
 
         for seg in segments_to_analyze:
             if seg not in self.models:
@@ -964,8 +650,10 @@ class SegmentedVisitorPredictor:
             features = self.feature_sets[seg]
 
             # Create importance DataFrame
-            imp_df = pd.DataFrame({"feature": features, "importance": importance})
-            imp_df = imp_df.sort_values("importance", ascending=False)
+            imp_df = pd.DataFrame({
+                "feature": features,
+                "importance": importance
+            }).sort_values("importance", ascending=False)
 
             # Group features by type
             feature_types = {
@@ -1009,13 +697,20 @@ class SegmentedVisitorPredictor:
 
                 # Plot top features
                 sns.barplot(
-                    data=imp_df.head(top_n), x="importance", y="feature", ax=ax1
+                    data=imp_df.head(top_n),
+                    x="importance",
+                    y="feature",
+                    ax=ax1
                 )
                 ax1.set_title("Top Individual Features")
                 ax1.set_xlabel("Importance Score")
 
                 # Plot feature type importance
-                sns.barplot(x=type_importance.values, y=type_importance.index, ax=ax2)
+                sns.barplot(
+                    x=type_importance.values,
+                    y=type_importance.index,
+                    ax=ax2
+                )
                 ax2.set_title("Feature Type Importance")
                 ax2.set_xlabel("Total Importance Score")
 
@@ -1106,9 +801,11 @@ if __name__ == "__main__":
 
     # Save Visitors Demand Prediction
     try:
-        os.makedirs("../Data_Sources/Data_Cleaned/Predictions", exist_ok=True)
+        path = os.path.join(
+            project_root, "Data_Sources", "Data_Modelling", "Predictions", "Segmented_Visitor_Demand_Prediction.csv"
+        )
 
-        path = "../Data_Sources/Data_Cleaned/Predictions/Segmented_Visitor_Demand_Prediction.csv"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         predictions_df.to_csv(path, index=False)
         print(f"Predictions saved successfully to: {path}")
 

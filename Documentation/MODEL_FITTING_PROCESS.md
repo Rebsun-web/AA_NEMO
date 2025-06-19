@@ -6,6 +6,31 @@ This document describes the model fitting process for the NEMO Science Museum vi
 1. Segmented Visitor Prediction Model
 2. Crew Size Prediction Model
 
+## Project Structure
+
+```
+AA_NEMO/
+│
+├── Data_Sources/
+│   ├── Data_Raw/
+│   ├── Data_Modelling/
+│   │   ├── Modelling/
+│   │   │   └── Table_for_modelling.csv
+│   │   └── Predictions/
+│   │       └── Segmented_Visitor_Demand_Prediction.csv
+│   └── Data_Processing/
+│       └── Imputer_Final_df.py
+│
+├── Models/
+│   ├── Segmented_Demand.py
+│   └── Crew_Size_Prediction.py
+│
+├── Documentation/
+│   └── MODEL_FITTING_PROCESS.md
+│
+└── ...
+```
+
 ## Data Used
 
 ### Training Data
@@ -63,12 +88,12 @@ graph TD
 Segment               R² Score    RMSE    MAE
 -----------------------------------------
 Dutch Recreational    0.85       125     98
-International        0.82       85      67
-Education (PO)       0.88       45      35
-Education (VO)       0.87       38      30
-Student Groups       0.83       42      33
-External Groups      0.81       28      22
-Total Visitors       0.89       180     145
+International         0.82        85     67
+Education (PO)        0.88        45     35
+Education (VO)        0.87        38     30
+Student Groups        0.83        42     33
+External Groups       0.81        28     22
+Total Visitors        0.89       180    145
 ```
 
 ### 2. Crew Size Prediction
@@ -78,9 +103,9 @@ Metric                     Score
 -----------------------------------------
 Overall Accuracy           87%
 Misclassification Rate     13%
-Perfect Match             75%
-Off by One Category       20%
-Major Mistakes             5%
+Perfect Match              75%
+Off by One Category        20%
+Major Mistakes              5%
 ```
 
 ## Feature Importance
@@ -93,11 +118,11 @@ Major Mistakes             5%
 |                                       |
 | Temporal Features        ████████ 25% |
 | Historical Patterns      ███████  20% |
-| Holiday Impact          ██████   15% |
-| Weather                 ██████   15% |
-| Tourism                 ████     10% |
-| Events                  ████     10% |
-| Disruptions             ██        5% |
+| Holiday Impact           ██████   15% |
+| Weather                  ██████   15% |
+| Tourism                  ████     10% |
+| Events                   ████     10% |
+| Disruptions              ██        5% |
 |---------------------------------------|
 ```
 
@@ -109,9 +134,9 @@ Major Mistakes             5%
 |                                       |
 | Visitor Numbers         ████████████ 35% |
 | Temporal Features       ████████     25% |
-| Holiday Impact         ██████       15% |
-| Weather               ██████       15% |
-| Historical            ████         10% |
+| Holiday Impact          ██████       15% |
+| Weather                 ██████       15% |
+| Historical              ████         10% |
 |---------------------------------------|
 ```
 
@@ -178,7 +203,7 @@ Error Type              Frequency
 --------------------------------
 Perfect Match          75%
 One Category Off       20%
-Multiple Categories    5%
+Multiple Categories     5%
 ```
 
 ## Seasonal Performance
@@ -274,4 +299,4 @@ def make_predictions(date):
 - API integration
 - Mobile predictions
 - Automated reporting
-- Alert system 
+- Alert system

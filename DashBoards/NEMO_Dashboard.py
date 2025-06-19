@@ -82,7 +82,7 @@ class NEMOPredictionDashboard:
             file_path = os.path.join(
                 project_root,
                 "Data_Sources",
-                "Data_Cleaned",
+                "Data_Modelling",
                 "Modelling",
                 "Table_for_modelling.csv",
             )
@@ -732,7 +732,7 @@ class NEMOPredictionDashboard:
             modelling_file = os.path.join(
                 project_root,
                 "Data_Sources",
-                "Data_Cleaned",
+                "Data_Modelling",
                 "Modelling",
                 "Table_for_modelling.csv"
             )
@@ -742,7 +742,7 @@ class NEMOPredictionDashboard:
             backup_dir = os.path.join(
                 project_root,
                 "Data_Sources",
-                "Data_Cleaned",
+                "Data_Modelling",
                 "Modelling",
                 "BackUps"
             )

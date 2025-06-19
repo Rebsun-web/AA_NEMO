@@ -6,13 +6,13 @@ This project provides a comprehensive solution for predicting and analyzing visi
 
 ```
 AA_NEMO/
-├── Data_Sources/        # Raw and processed data files
-│   ├── Data_Raw/       # Original data files from Google Drive
-│   └── Data_Cleaned/   # Processed and cleaned datasets, examples are also in Google Drive
-├── Models/             # Trained machine learning models
-├── DashBoards/         # Streamlit dashboard application
+├── Data_Sources/          # Raw and processed data files
+│   ├── Data_Raw/          # Original data files from Google Drive
+│   └── Data_Modelling/    # Processed and cleaned datasets, examples are also in Google Drive
+├── Models/                # Trained machine learning models
+├── DashBoards/            # Streamlit dashboard application
 │   └── NEMO_Dashboard.py  # Main dashboard application
-└── requirements.txt    # Project dependencies
+└── requirements.txt       # Project dependencies
 ```
 
 ## Data Setup (Required)
@@ -24,7 +24,7 @@ Before running the application, you need to set up the data files:
    ```
    AA_NEMO/Data_Sources/
    ├── Data_Raw/      # Place the raw data files here
-   └── Data_Cleaned/  # Place the cleaned data files here
+   └── Data_Modelling/  # Place the cleaned data files here
    ```
 3. Place the downloaded files in their respective directories as shown above
 
