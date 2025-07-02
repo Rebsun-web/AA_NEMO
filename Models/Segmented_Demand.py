@@ -3,10 +3,12 @@ import seaborn as sns
 import pandas as pd
 import numpy as np
 import os
+import re
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from matplotlib.patches import Patch
 
 # --- Data Loading ---
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,6 +44,154 @@ class SegmentedVisitorPredictor:
         }
         self.inverse_segment_mappings = {v: k for k, v in self.segment_mappings.items()}
 
+    def format_feature_name(self, feature_name):
+        """
+        Format feature names for better readability in plots.
+        Converts snake_case to Title Case and handles special formatting.
+        """
+        # Replace underscores with spaces
+        formatted = feature_name.replace('_', ' ')
+        
+        # Handle special cases for common abbreviations and terms
+        replacements = {
+            ' nl ': ' NL ',
+            ' vo ': ' VO ',
+            ' po ': ' PO ',
+            ' pv ': ' PV ',
+            ' yoy ': ' YoY ',
+            ' cos ': ' Cos ',
+            ' sin ': ' Sin ',
+            'lag ': 'Lag ',
+            'momentum': 'Momentum',
+            'occupancy': 'Occupancy',
+            'buitenland': 'Buitenland',
+            'recreatief': 'Recreational',
+            'recreationeel': 'Recreational',
+            'student': 'Student',
+            'extern': 'Extern',
+            'holiday': 'Holiday',
+            'weekend': 'Weekend',
+            'theaters': 'Theaters',
+            'museums': 'Museums',
+            'hotel': 'Hotel',
+            'belgium': 'Belgium',
+            'france': 'France',
+            'italy': 'Italy',
+            'holland': 'Holland',
+            'meantemp': 'Meantemp',
+            'dayofweek': 'Dayofweek',
+            'duration': 'Duration',
+            'minutes': 'Minutes',
+            'disruptions': 'Disruptions',
+            'count': 'Count',
+            'index': 'Index',
+            'strength': 'Strength',
+            'season': 'Season',
+            'shoulder': 'Shoulder',
+            'tourism': 'Tourism',
+            'peak': 'Peak',
+            'summer': 'Summer',
+            'very': 'Very',
+            'hot': 'Hot',
+            'open': 'Open',
+            'nemo': 'Nemo',
+            'north': 'North'
+        }
+        
+        # Apply replacements (case insensitive)
+        formatted_lower = formatted.lower()
+        for old, new in replacements.items():
+            formatted_lower = formatted_lower.replace(old.lower(), f' {new} ')
+        
+        # Clean up extra spaces and capitalize appropriately
+        words = formatted_lower.split()
+        formatted_words = []
+        
+        for word in words:
+            word = word.strip()
+            if word:
+                # Keep certain words in specific cases
+                if word.upper() in ['NL', 'VO', 'PO', 'PV', 'YOY']:
+                    formatted_words.append(word.upper())
+                elif word in ['Lag', 'Momentum', 'Cos', 'Sin']:
+                    formatted_words.append(word)
+                else:
+                    formatted_words.append(word.capitalize())
+        
+        # Convert "Lag X" to "(Lag X)" format
+        result = ' '.join(formatted_words)
+        result = re.sub(r'\bLag (\d+)\b', r'(Lag \1)', result)
+        
+        return result
+
+    def plot_segment_correlations(self, df, segment, exclude_columns=None):
+        """
+        Plot feature correlations with each segment's visitor count.
+        Shows top 20 positive and top 20 negative correlations for each segment.
+        
+        Args:
+            df (pd.DataFrame): The dataframe with all features and segment columns.
+            segment (str): The segment column to analyze correlations for.
+            exclude_columns (list): Columns to exclude from correlation analysis.
+        """
+        if exclude_columns is None:
+            exclude_columns = []
+        
+        segment_columns = [
+            "recreatief_nl", "recreatief_buitenland", "po", "vo", "student", "extern", "total_visitors"
+        ]
+        
+        # Only use numeric columns for correlation
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        features = [col for col in numeric_cols if col not in segment_columns + exclude_columns]
+        
+        # Compute correlations
+        corr = df[features + [segment]].corr()[segment].drop(segment)
+        
+        # Select top 20 positive and top 20 negative correlations
+        top_pos = corr.sort_values(ascending=False).head(20)
+        top_neg = corr.sort_values().head(20)
+        corr_to_plot = pd.concat([top_pos, top_neg]).drop_duplicates().sort_values()
+        
+        # Format feature names for display
+        formatted_names = [self.format_feature_name(f) for f in corr_to_plot.index]
+        
+        # Identify features with "(Lag)" in their formatted names for green coloring
+        colors = []
+        for formatted_name in formatted_names:
+            if "(Lag" in formatted_name or "Rolling" in formatted_name:
+                colors.append("green")
+            else:
+                colors.append("black")
+        
+        # Plot
+        plt.figure(figsize=(18, 10))
+        bars = plt.barh(formatted_names, corr_to_plot.values, color=colors)
+        plt.axvline(0, color="gray", linestyle="--", linewidth=1)
+        
+        # Format title
+        segment_title = self.format_feature_name(segment)
+        plt.title(f"Top 20 Positive & Negative Feature Correlations with {segment_title}", 
+                fontsize=14, fontweight='bold')
+        plt.xlabel("Correlation Coefficient", fontsize=12)
+        plt.ylabel("Features", fontsize=12)
+        
+        # Legend
+        legend_elements = [
+            Patch(facecolor='black', label='Regular Features'),
+            Patch(facecolor='green', label='Lagged Features')
+        ]
+        plt.legend(handles=legend_elements, loc='best')
+        
+        # Improve layout
+        plt.tight_layout()
+        plt.grid(axis='x', alpha=0.3)
+        
+        # Rotate y-axis labels if they're too long
+        plt.tick_params(axis='y', labelsize=10)
+        
+        plt.show()
+
     def standardize_column_names(self, df):
         """Standardize column names to snake_case and segment names."""
         df = df.copy()
@@ -56,10 +206,12 @@ class SegmentedVisitorPredictor:
         If target_segment is provided, excludes current segment values but keeps historical data.
         """
         df = df.copy()
+
         # Calculate total visitors if not present
         if "total_visitors" not in df.columns:
             visitor_cols = [col for col in self.segment_mappings.values() if col != "total_visitors" and col in df.columns]
             df["total_visitors"] = df[visitor_cols].sum(axis=1)
+
         # Remove current values of other segments for the target
         segment_cols = list(self.segment_mappings.values())
         if target_segment and target_segment in df.columns:
@@ -69,6 +221,7 @@ class SegmentedVisitorPredictor:
             else:
                 current_segments = [col for col in segment_cols if col != target_segment]
                 df = df.drop(columns=current_segments)
+
         # Time features
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"])
@@ -83,9 +236,10 @@ class SegmentedVisitorPredictor:
                 9: "fall", 10: "fall", 11: "fall"
             }
             df["season"] = df["date"].dt.month.map(season_mapping)
-            season_dummies = pd.get_dummies(df["season"], prefix="season", drop_first=True)
+            season_dummies = pd.get_dummies(df["season"], prefix="season", drop_first=True, dtype=int)
             df = pd.concat([df, season_dummies], axis=1)
             df = df.drop("season", axis=1)
+
         # Weather features
         weather_cols = ["meantemp_c", "precipitation_mm"]
         if all(col in df.columns for col in weather_cols):
@@ -96,7 +250,7 @@ class SegmentedVisitorPredictor:
                 bins=[-float("inf"), 5, 15, 25, float("inf")],
                 labels=["cold", "mild", "warm", "hot"]
             )
-            temp_dummies = pd.get_dummies(df["temp_category"], prefix="temp", drop_first=True)
+            temp_dummies = pd.get_dummies(df["temp_category"], prefix="temp", drop_first=True, dtype=int)
             df = pd.concat([df, temp_dummies], axis=1)
             df = df.drop("temp_category", axis=1)
             df["precip_category"] = pd.cut(
@@ -104,26 +258,47 @@ class SegmentedVisitorPredictor:
                 bins=[-float("inf"), 0.1, 5, float("inf")],
                 labels=["dry", "light", "heavy"]
             )
-            precip_dummies = pd.get_dummies(df["precip_category"], prefix="precip", drop_first=True)
+            precip_dummies = pd.get_dummies(df["precip_category"], prefix="precip", drop_first=True, dtype=int)
             df = pd.concat([df, precip_dummies], axis=1)
             df = df.drop("precip_category", axis=1)
+
         # Day type features
         df["is_monday"] = (df["day_of_week"] == 0).astype(int)
         df["is_friday"] = (df["day_of_week"] == 4).astype(int)
         df["is_saturday"] = (df["day_of_week"] == 5).astype(int)
         df["is_sunday"] = (df["day_of_week"] == 6).astype(int)
         df = df.drop("day_of_week", axis=1)
+
         # Holiday features
         holiday_cols = [col for col in df.columns if "holiday" in col.lower()]
         if holiday_cols:
             df["total_holidays"] = df[holiday_cols].sum(axis=1)
             if target_segment == "recreatief_nl":
-                df["nl_holiday_effect"] = df["holiday_nl"].fillna(0)
+                df["nl_holiday_effect"] = df["public_holiday"].fillna(0)
             elif target_segment == "recreatief_buitenland":
-                intl_holidays = [col for col in holiday_cols if col != "holiday_nl"]
+                intl_holidays = [col for col in holiday_cols if col != "public_holiday"]
                 df["intl_holiday_effect"] = df[intl_holidays].sum(axis=1)
             elif target_segment in ["po", "vo", "student"]:
-                df["edu_holiday_effect"] = df["holiday_nl"].fillna(0) * 2 + df["total_holidays"]
+                df["edu_holiday_effect"] = df["school_holiday"].fillna(0) * 2 + df["total_holidays"]
+
+        # Convert boolean columns to int
+        bool_cols = df.select_dtypes(include=['bool']).columns
+        for col in bool_cols:
+            df[col] = df[col].astype(int)
+
+        # Handle remaining object columns by converting to category codes or dummy variables
+        object_cols = df.select_dtypes(include=['object']).columns
+        for col in object_cols:
+            if col != 'date':  # Skip date column
+                # If few unique values, create dummy variables
+                if df[col].nunique() <= 10:
+                    dummies = pd.get_dummies(df[col], prefix=col, drop_first=True, dtype=int)
+                    df = pd.concat([df, dummies], axis=1)
+                    df = df.drop(col, axis=1)
+                else:
+                    # For high cardinality, use label encoding
+                    df[col] = pd.Categorical(df[col]).codes
+
         return df
 
     def add_lagged_features(self, df, segment, lags=[1, 7, 14, 28]):
@@ -171,12 +346,70 @@ class SegmentedVisitorPredictor:
         df_processed = self.engineer_features(df_processed, target_segment=segment)
         df_processed = self.add_lagged_features(df_processed, segment)
         df_processed = self.add_rolling_features(df_processed, segment)
-        df_processed = df_processed.dropna()
-        if "date" in df_processed.columns:
-            df_processed = df_processed.drop("date", axis=1)
-        features = [col for col in df_processed.columns if col != segment]
-        print(f"Features used for {segment}: {features}")
+        
+        # Only drop rows where the target variable is NaN
+        df_processed = df_processed.dropna(subset=[segment])
+        
+        # Fill lagged features with forward fill or mean
+        lag_cols = [col for col in df_processed.columns if 'lag' in col or 'rolling' in col]
+        for col in lag_cols:
+            if col in df_processed.columns:
+                # Use the newer pandas methods instead of deprecated ones
+                df_processed[col] = df_processed[col].ffill().bfill().fillna(0)
+        
+        # Fill other numerical columns with their median
+        numeric_cols = df_processed.select_dtypes(include=[np.number]).columns
+        for col in numeric_cols:
+            if df_processed[col].isna().any():
+                df_processed[col] = df_processed[col].fillna(df_processed[col].median())
+        
+        # Fill categorical columns with mode or 0
+        categorical_cols = df_processed.select_dtypes(include=['object', 'category']).columns
+        for col in categorical_cols:
+            if df_processed[col].isna().any():
+                df_processed[col] = df_processed[col].fillna(df_processed[col].mode().iloc[0] if not df_processed[col].mode().empty else 0)
+        
+        # Remove non-numeric columns and other columns that shouldn't be features
+        columns_to_exclude = [
+            "date", "year", "month",  # Time-related
+            "has_predictions", "prediction_made_date",  # Metadata columns
+            segment  # Target variable
+        ]
+        
+        # Also exclude any remaining string/object columns that aren't dummy variables
+        # string_cols = df_processed.select_dtypes(include=['object', 'datetime', 'datetime64']).columns
+        # columns_to_exclude.extend(string_cols.tolist())
+        
+        # Remove duplicates and ensure target is excluded
+        columns_to_exclude = list(set(columns_to_exclude))
+        
+        # Get all columns except those to exclude
+        all_columns = df_processed.columns.tolist()
+        features = [col for col in all_columns if col not in columns_to_exclude]
+        
+        print(f"Features used for {segment}: {len(features)} features")
+        print(f"Dataset size after processing: {len(df_processed)} rows")
+        print(f"Excluded columns: {[col for col in columns_to_exclude if col in all_columns]}")
+        
+        # Check if we have any data left
+        if len(df_processed) == 0:
+            print(f"ERROR: No data remaining for segment {segment} after processing!")
+            return None, None, None
+        
+        # Double-check that all feature columns are numeric
         X = df_processed[features]
+        non_numeric = X.select_dtypes(exclude=[np.number]).columns
+        if len(non_numeric) > 0:
+            print(f"WARNING: Non-numeric columns found in features: {non_numeric.tolist()}")
+            # Remove these columns
+            features = [col for col in features if col not in non_numeric]
+            # X = df_processed[features]
+            print(f"Updated feature count after removing non-numeric: {len(features)}")
+        
+        # Optionally, exclude columns like 'date', etc.
+        exclude_columns = ["year", "month", "has_predictions", "prediction_made_date"]
+        self.plot_segment_correlations(df_processed, segment, exclude_columns)
+
         y = df_processed[segment]
         return X, y, features
 

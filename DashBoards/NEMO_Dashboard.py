@@ -17,9 +17,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from Models.Crew_Size_Prediction import CrewSizePredictionModel
     from Models.Segmented_Demand import SegmentedVisitorPredictor
-    from Data_Sources.Data_Processing.HolidayChecker import HolidayChecker
+    from Data_Sources.Data_Processing.Holiday_Checker import InternationalHolidayChecker
     from Data_Sources.Data_Processing.Imputer_Final_df import (
-        create_tourism_features_for_dates,
+        create_tourism_features_for_dates
     )
 except ImportError as e:
     st.error(f"Import error: {e}")
@@ -73,7 +73,7 @@ def safe_session_state_get(key, default=None):
 # Dashboard
 class NEMOPredictionDashboard:
     def __init__(self):
-        self.holiday_checker = HolidayChecker()
+        self.holiday_checker = InternationalHolidayChecker()
 
     def load_historical_data(self):
         """Load your historical training data"""

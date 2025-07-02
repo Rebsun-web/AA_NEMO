@@ -1,7 +1,7 @@
 import holidays
 
 
-class HolidayChecker:
+class InternationalHolidayChecker:
     """Check for international holidays automatically"""
 
     def __init__(self):

@@ -2,7 +2,10 @@ import os
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
+from Data_Sources.Data_Processing.School_Holidays import create_school_holiday_dataset_openapi
+from Data_Sources.Data_Processing.Public_Holiday import create_public_holiday_dataset_openapi
 import warnings
+
 
 warnings.filterwarnings('ignore')
 
@@ -59,8 +62,8 @@ column_rename = {
     "Amsterdam Events": {"date": "Date", "event_count": "Events_in_Ams"},
     "disruptions_data_historical": {
         "start_time_date": "Date",
-        "duration_minutes_sum": "duration_minutes",
-        "disruptions_count": "disruptions_count"
+        "duration_minutes_sum": "traffic_disruptions_minutes",
+        "disruptions_count": "traffic_disruptions_count"
     }
 }
 
@@ -149,6 +152,8 @@ def count_nan_and_zeros(df):
 
 
 count_nan_and_zeros(merged_dataset)
+print(merged_dataset.columns)
+merged_dataset = merged_dataset.drop(['school_holiday', 'public_holiday', 'holiday_nl'], axis=1, errors='ignore')
 
 
 def impute_is_open(df):
@@ -171,22 +176,23 @@ def impute_is_open(df):
 
 def impute_school_holiday(df):
     result_df = df.copy()
-    mask_school_groups = (result_df['PO'] > 0) | (result_df['VO'] > 0)
-    result_df.loc[mask_school_groups, 'school_holiday'] = 0
-    result_df.loc[result_df['school_holiday'].isna(), 'school_holiday'] = (
-        result_df.loc[result_df['school_holiday'].isna(), 'holiday_nl']
+    school_holiday_df = create_school_holiday_dataset_openapi(start_date, end_date)
+    result_df = result_df.merge(
+        school_holiday_df[["date", "school_holiday"]],
+        left_on="Date", right_on="date", how="left"
     )
+    result_df = result_df.drop(columns=["date"])
     return result_df
 
 
 def impute_public_holiday(df):
     result_df = df.copy()
-    result_df.loc[result_df['public_holiday'].isna(), 'public_holiday'] = (
-        result_df.loc[result_df['public_holiday'].isna(), 'holiday_all']
+    public_holiday_df = create_public_holiday_dataset_openapi(start_date, end_date)
+    result_df = result_df.merge(
+        public_holiday_df[["date", "public_holiday"]],
+        left_on="Date", right_on="date", how="left"
     )
-    weekend_mask = result_df['weekday'].isin([5, 6])
-    closed_weekday_mask = (result_df['is_open'] == 0) & (~weekend_mask)
-    result_df.loc[closed_weekday_mask, 'public_holiday'] = 1
+    result_df = result_df.drop(columns=["date"])
     return result_df
 
 
@@ -228,8 +234,8 @@ def impute_disruption_duration(df, column_to_impute):
     return result_df
 
 
-merged_dataset = impute_disruption_duration(merged_dataset, 'duration_minutes')
-merged_dataset = impute_disruption_duration(merged_dataset, 'disruptions_count')
+merged_dataset = impute_disruption_duration(merged_dataset, 'traffic_disruptions_minutes')
+merged_dataset = impute_disruption_duration(merged_dataset, 'traffic_disruptions_count')
 
 seasonal_path = os.path.join(project_root, "Data_Raw", "Data_Seasonal_Patterns")
 datasets_seasonal = {}
